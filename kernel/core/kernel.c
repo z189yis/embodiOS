@@ -257,6 +257,11 @@ void kernel_main(void)
     console_printf("Initializing PCI subsystem...\n");
     pci_init();
 
+    /* Initialize interrupt system (IDT + PIC remap + LAPIC LINT0).
+     * Must run after arch_smp_init() which enables the Local APIC. */
+    console_printf("Initializing interrupts...\n");
+    arch_interrupt_init();
+
     /* VirtIO block driver for loading models from disk */
     console_printf("Initializing VirtIO block driver...\n");
 #ifdef __aarch64__
@@ -345,7 +350,32 @@ void kernel_main(void)
     }
     console_printf("[DEBUG] Constructors done\n");
 
-    console_printf("\nEMBODIOS Ready (polling mode - no interrupts).\n");
+    /* Enable interrupts: PIT IRQ0 now ticks at 100Hz and drives
+     * timer_interrupt_handler() -> scheduler_tick(). */
+    arch_enable_interrupts();
+
+    /* Timer self-test: with IRQs enabled, system ticks must advance.
+     * The QEMU boot smoke test in CI asserts on this marker. */
+    {
+        extern uint64_t timer_get_milliseconds(void);
+        extern uint64_t timer_get_ticks(void);
+
+        uint64_t t0 = timer_get_milliseconds();
+        while (timer_get_milliseconds() - t0 < 250) {
+            /* Busy-wait 250ms */
+        }
+
+        uint64_t ticks = timer_get_ticks();
+        if (ticks >= 5) {
+            console_printf("TIMER SELF-TEST OK: %llu ticks in 250ms\n",
+                           (unsigned long long)ticks);
+        } else {
+            console_printf("TIMER SELF-TEST FAIL: only %llu ticks in 250ms\n",
+                           (unsigned long long)ticks);
+        }
+    }
+
+    console_printf("\nEMBODIOS Ready (timer interrupts enabled).\n");
     console_printf("Type 'help' for available commands.\n\n");
 
     /* TEMPORARY: Manually run PMM test to verify framework works */

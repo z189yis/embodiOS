@@ -293,6 +293,16 @@ jobs:
             exit 1
         fi
 
+        # Timer self-test must pass (PIT IRQ0 reaching the kernel at 100Hz)
+        if grep -q "TIMER SELF-TEST FAIL" boot.log; then
+            echo "✗ Timer self-test failed"
+            tail -20 boot.log
+            exit 1
+        fi
+        if grep -q "TIMER SELF-TEST OK" boot.log; then
+            echo "✓ Timer interrupts working"
+        fi
+
         # Report additional status markers if present
         grep -E "All tests passed|Tests failed|tests passed" boot.log || true
 

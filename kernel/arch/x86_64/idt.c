@@ -4,6 +4,7 @@
 #include "../../include/arch/x86_64/idt.h"
 #include "../../include/arch/x86_64/interrupt.h"
 #include "../../include/embodios/mm.h"
+#include "../../include/embodios/console.h"
 
 /* IDT entry structure */
 struct idt_entry {
@@ -88,11 +89,47 @@ void idt_install_handler(uint8_t num, uint64_t handler)
 /* C interrupt handler - called from assembly stub */
 void interrupt_handler(struct interrupt_frame* frame)
 {
-    /* For now, just a stub that does nothing */
-    /* In a full implementation, this would:
-     * 1. Dispatch to registered handlers
-     * 2. Handle exceptions (print error, maybe panic)
-     * 3. Send EOI to PIC/APIC
-     */
-    (void)frame;
+    uint64_t vector = frame->int_no;
+
+    /* CPU exceptions (0-31): fatal - report and halt */
+    if (vector < 32) {
+        static const char* const names[] = {
+            "#DE", "#DB", "NMI", "#BP", "#OF", "#BR", "#UD", "#NM",
+            "#DF", "#CSO", "#TS", "#NP", "#SS", "#GP", "#PF", "reserved",
+            "#MF", "#AC", "#MC", "#XM", "#VE", "reserved", "reserved",
+            "reserved", "reserved", "reserved", "reserved", "reserved",
+            "reserved", "reserved", "#SX", "reserved"
+        };
+        console_printf("\n\n*** KERNEL EXCEPTION %s (vector %llu) ***\n",
+                       names[vector], (unsigned long long)vector);
+        console_printf("  RAX=%016llx  RBX=%016llx  RCX=%016llx  RDX=%016llx\n",
+                       (unsigned long long)frame->rax, (unsigned long long)frame->rbx,
+                       (unsigned long long)frame->rcx, (unsigned long long)frame->rdx);
+        console_printf("  RIP=%016llx  RSP=%016llx  RFLAGS=%016llx\n",
+                       (unsigned long long)frame->rip, (unsigned long long)frame->rsp,
+                       (unsigned long long)frame->rflags);
+        console_printf("  CS=%016llx  SS=%016llx  ERR=%016llx\n",
+                       (unsigned long long)frame->cs, (unsigned long long)frame->ss,
+                       (unsigned long long)frame->err_code);
+        console_printf("  Kernel halted.\n");
+
+        __asm__ volatile("cli");
+        for (;;) { __asm__ volatile("hlt"); }
+    }
+
+    /* IRQs (32-47): acknowledge the 8259 and dispatch */
+    if (vector >= 32 && vector < 48) {
+        int irq = (int)(vector - 32);
+
+        if (irq >= 8) {
+            __asm__ volatile("outb %0, %1" :: "a"((uint8_t)0x20), "Nd"((uint16_t)0xA0));
+        }
+        __asm__ volatile("outb %0, %1" :: "a"((uint8_t)0x20), "Nd"((uint16_t)0x20));
+
+        if (vector == 32) {
+            /* Timer interrupt: advances system ticks + scheduler tick */
+            extern void timer_interrupt_handler(void);
+            timer_interrupt_handler();
+        }
+    }
 }
