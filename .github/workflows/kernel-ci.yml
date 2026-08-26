@@ -219,3 +219,85 @@ jobs:
           objdump -h embodios.elf | grep -E "^\s*[0-9]+" | \
             awk '{printf "%-20s %10s bytes\n", $2, strtonum("0x" $3)}'
         fi
+  kernel-build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install build dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y gcc-x86-64-linux-gnu binutils-x86-64-linux-gnu
+
+    - name: Build kernel (x86_64)
+      working-directory: kernel
+      run: |
+        make -j$(nproc) 2>&1 | tee build.log
+        ls -la embodios.elf
+
+    - name: Upload kernel ELF
+      uses: actions/upload-artifact@v4
+      with:
+        name: kernel-elf
+        path: kernel/embodios.elf
+        if-no-files-found: error
+
+  kernel-boot:
+    runs-on: ubuntu-latest
+    needs: kernel-build
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install QEMU
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y qemu-system-x86
+
+    - name: Download kernel ELF
+      uses: actions/download-artifact@v4
+      with:
+        name: kernel-elf
+        path: download
+
+    - name: Boot kernel in QEMU (smoke test)
+      run: |
+        KERNEL_ELF=$(find download -name "embodios.elf" | head -1)
+        if [ -z "$KERNEL_ELF" ]; then
+          echo "✗ kernel/embodios.elf not found in artifact"
+          find download -type f
+          exit 1
+        fi
+        echo "Booting: $KERNEL_ELF"
+        # Boot kernel via QEMU, capture serial output
+        # -kernel: multiboot2 ELF boot; -serial stdio: all console output on stdout
+        # -display none: headless; -no-reboot: exit on triple fault
+        timeout 180 bash -c "qemu-system-x86_64 \
+            -kernel $KERNEL_ELF \
+            -m 2G \
+            -serial stdio \
+            -display none \
+            -no-reboot \
+            -no-shutdown \
+            < /dev/null" > boot.log 2>&1 || true
+
+        echo "=== Boot log (tail) ==="
+        tail -60 boot.log
+
+        # Smoke test: kernel must reach the "Ready" banner
+        if grep -q "EMBODIOS Ready" boot.log; then
+            echo "✓ Kernel booted successfully"
+        else
+            echo "✗ Kernel failed to boot"
+            exit 1
+        fi
+
+        # Report additional status markers if present
+        grep -E "All tests passed|Tests failed|tests passed" boot.log || true
+
+    - name: Upload boot log
+      uses: actions/upload-artifact@v4
+      with:
+        name: boot-log
+        path: boot.log

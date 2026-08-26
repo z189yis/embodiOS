@@ -211,8 +211,9 @@ static const size_t ggml_block_elements[] = {
     [GGML_TYPE_Q6_K] = 256, [GGML_TYPE_Q8_K] = 256,
 };
 
-/* Renamed to avoid conflict with GGML library */
-static const char *kernel_ggml_type_name(ggml_type_t type)
+/* Type-name helper. Named ggml_type_name per gguf_parser.h; the vendored
+ * ggml library that previously provided this symbol is no longer linked. */
+const char *ggml_type_name(ggml_type_t type)
 {
     static const char *names[] = {
         [GGML_TYPE_F32] = "F32",   [GGML_TYPE_F16] = "F16",   [GGML_TYPE_Q4_0] = "Q4_0",
@@ -1595,7 +1596,7 @@ void gguf_parser_print_summary(void)
     console_printf("\nTensors: %llu\n", (unsigned long long)g_ctx.n_tensors);
     console_printf("Tensor data offset: %zu\n", (size_t)(g_ctx.tensor_data_start - g_ctx.data));
     console_printf("Alignment: %zu bytes\n", g_ctx.alignment);
-    console_printf("Quantization: %s\n", kernel_ggml_type_name(g_ctx.predominant_type));
+    console_printf("Quantization: %s\n", ggml_type_name(g_ctx.predominant_type));
     console_printf("==========================\n\n");
 }
 
