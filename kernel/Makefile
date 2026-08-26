@@ -288,14 +288,21 @@ ifeq ($(GGML_VULKAN),1)
     LLAMA_CPP_SOURCES += llama_cpp/ggml/ggml-vulkan.cpp
 endif
 
-# GGML core library - ENABLED
-# Complete GGML sources synced from llama.cpp repository
-# ggml-backend-stubs.c provides kernel-based implementations of backend functions
+# GGML core library - DISABLED
+# The vendored full ggml (ggml.c/ggml-quants.c/ggml-alloc.c) does not build
+# against the kernel compat layer: it pulls host POSIX headers
+# (sys/types.h, sys/stat.h, ...) which conflict with the compat shims
+# (e.g. compat/unistd.h typedefs gid_t as int), and ggml.c also conflicts
+# with its own ggml.h under -std=gnu11 (62 errors on Ubuntu gcc-13).
+# No compiled kernel source references ggml symbols:
+#   - gpu_backend.c uses ggml_backend_vk_* only under GGML_USE_VULKAN
+#   - gguf_parser.c / gguf_loader.c define their own kernel-local ggml_type
+# Enable after the compat layer covers the full ggml surface.
 GGML_C_SOURCES = \
-    llama_cpp/ggml/ggml.c \
-    llama_cpp/ggml/ggml-quants.c \
-    llama_cpp/ggml/ggml-alloc.c \
-    llama_cpp/ggml/ggml-backend-stubs.c
+    # llama_cpp/ggml/ggml.c \
+    # llama_cpp/ggml/ggml-quants.c \
+    # llama_cpp/ggml/ggml-alloc.c \
+    # llama_cpp/ggml/ggml-backend-stubs.c
 
 # Architecture-specific sources
 ifeq ($(ARCH),x86_64)
