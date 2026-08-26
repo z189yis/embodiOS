@@ -348,17 +348,12 @@ void arch_interrupt_init(void)
     __asm__ volatile("outb %0, %1" :: "a"((uint8_t)0xFE), "Nd"((uint16_t)0x21)); /* mask: IRQ0 only */
     __asm__ volatile("outb %0, %1" :: "a"((uint8_t)0xFF), "Nd"((uint16_t)0xA1));
 
-    /* arch_smp_init() enabled the Local APIC, which would swallow PIC
-     * interrupts. Route the PIC through LINT0 in ExtINT mode so PIT IRQ0
-     * still reaches the CPU. */
-    uint32_t lo, hi;
-    __asm__ volatile("rdmsr" : "=a"(lo), "=d"(hi) : "c"(0x1B)); /* MSR_APIC_BASE */
-    uint64_t apic_base = (((uint64_t)hi << 32) | lo) & 0xFFFFF000ULL;
-    if (apic_base) {
-        volatile uint32_t *lvt_lint0 = (volatile uint32_t *)(uintptr_t)(apic_base + 0x350);
-        *lvt_lint0 = 0x700; /* ExtINT delivery, unmasked */
-    }
-
+    /* PIC routing note: on this system arch_smp_init() skips APIC
+     * initialization for single-CPU QEMU ("SMP: Single processor system"),
+     * so the 8259 delivers IRQs through the CPU's default LAPIC LINT0
+     * (ExtINT mode from hardware reset) - no LAPIC programming needed.
+     * If SMP is enabled later, the APIC gets programmed and this path
+     * must be revisited. */
     console_printf("Interrupts: IDT loaded, PIC remapped to vectors 32-47\n");
 }
 
