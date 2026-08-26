@@ -207,43 +207,27 @@ KERNEL_C_SOURCES = \
     mm/slab.c \
     mm/heap.c \
     ai/model_runtime.c \
-    ai/tvm_runtime.c \
-    ai/tvm_graph_executor.c \
-    ai/tvm_model_loader.c \
-    ai/tokenizer.c \
-    ai/gguf_integer_loader.c \
     ai/gguf_parser.c \
     ai/gguf_loader.c \
+    ai/model_loader.c \
+    ai/embeddings.c \
     ai/gguf_inference.c \
     ai/quantized_ops.c \
     ai/quantized_test.c \
     ai/gpu_backend.c \
     ai/vulkan_test.c \
     ai/e2e_gpu_test.c \
-    ai/quantized_inference.c \
-    ai/tinyllama_integer_inference.c \
-    ai/tinystories_inference.c \
     ai/simd_ops.c \
     ai/memory_opt.c \
     ai/quantized_matmul_simd.c \
-    ai/embeddings.c \
-    ai/embedding_benchmark.c \
     ai/kv_cache_enhanced.c \
-    ai/kv_cache_benchmark.c \
-    ai/model_loader.c \
     ai/model_registry.c \
     ai/embedded_model_stubs.c \
     ai/bpe_tokenizer.c \
-    ai/transformer_full.c \
-    ai/transformer_inference.c \
-    ai/inference_test.c \
-    ai/tensor_ops.c \
     ai/streaming_inference.c \
     ai/parallel_inference.c \
     ai/fixed_point.c \
     ai/benchmark.c \
-    ai/tvm_benchmark.c \
-    ai/tinyllama_gguf_inference.c \
     test/test_framework.c \
     test/example_test.c \
     test/test_pmm.c \
@@ -258,18 +242,9 @@ ifeq ($(COVERAGE),1)
     KERNEL_C_SOURCES += lib/gcov_stubs.c
 endif
 
-# Math library enabled (SSE enabled for AI inference)
-# ai/tvm_graph_executor.c \
-# ai/tvm_tinyllama.c \
-# ai/tensor_ops.c \
-# ai/transformer_full.c \
-# ai/gguf_loader.c \
-# ai/model_loader.c \
-# ai/simple_llm.c \
-# ai/tinyllama_gguf_inference.c \
-# ai/tvm_model_loader.c \
-# ai/working_model.c \
-# ai/real_inference.c \
+# Legacy/duplicate AI experiment engines have been moved to ai/_archive/
+# and are intentionally not compiled. The active inference path is:
+# gguf_parser.c -> bpe_tokenizer.c -> streaming_inference.c (+ kv_cache_enhanced.c)
 
 # LLaMA.cpp integration - ENABLED with full GGML support
 # The compat headers in kernel/include/compat/ provide bare-metal stubs for stdio.h, etc.

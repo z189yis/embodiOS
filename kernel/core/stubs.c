@@ -17,7 +17,6 @@
 #include "embodios/pci.h"
 #include "embodios/task.h"
 #include "embodios/tcpip.h"
-#include "embodios/tvm.h"
 #include "embodios/types.h"
 #include "embodios/virtio_blk.h"
 
@@ -198,7 +197,7 @@ void process_command(const char *command)
         console_printf(" Testing:\n");
         console_printf("   memtest/locktest   Memory and locking tests\n");
         console_printf("   quanttest/bench    Quantization tests\n");
-        console_printf("   tvmload/run/bench  TVM runtime tests\n");
+        console_printf("   vulkantest/gpue2e  GPU acceleration tests\n");
         console_printf("\n");
     } else if (strcmp(command, "status") == 0) {
         /* System and AI status overview */
@@ -545,26 +544,8 @@ void process_command(const char *command)
         g_chat_perf.last_total_us = elapsed_us;
         g_chat_perf.valid = true;
     } else if (strncmp(command, "ai ", 3) == 0) {
-        /* TinyStories interactive inference */
-        const char *prompt = command + 3;
-
-        extern int tinystories_infer(const char *prompt, char *output, size_t max_len);
-        extern bool tinystories_is_loaded(void);
-
-        if (!tinystories_is_loaded()) {
-            console_printf("ERROR: TinyStories model not loaded!\n");
-            return;
-        }
-
-        char output[512];
-        console_printf("\nGenerating text (this may take a while)...\n");
-        int result = tinystories_infer(prompt, output, sizeof(output));
-
-        if (result > 0) {
-            console_printf("\nGenerated: %s\n\n", output);
-        } else {
-            console_printf("ERROR: Inference failed\n");
-        }
+        console_printf("The 'ai' command was removed with the legacy TinyStories engine.\n");
+        console_printf("Use 'chat <msg>' or 'talk' with the GGUF model.\n");
     } else if (strcmp(command, "mem") == 0) {
         /* Show PMM stats */
         pmm_print_stats();
@@ -735,118 +716,6 @@ void process_command(const char *command)
             console_printf("TinyLlama> I'm running in EMBODIOS kernel space. Model inference not "
                            "yet fully implemented.\n");
         }
-    } else if (strcmp(command, "tinystories") == 0) {
-        extern void tinystories_test(void);
-        tinystories_test();
-    } else if (strcmp(command, "tvm") == 0) {
-        tvm_runtime_stats();
-    } else if (strcmp(command, "tvmbench") == 0) {
-        /* Run TVM runtime performance benchmark */
-        extern void tvm_run_benchmark(void);
-        tvm_run_benchmark();
-    } else if (strcmp(command, "tvmload") == 0) {
-        /* Load test TVM module */
-        extern void* tvm_create_test_module(size_t* out_size);
-        extern TVMModule* tvm_module_load(const void* module_data, size_t size);
-        extern TVMRuntime* tvm_get_runtime(void);
-
-        console_printf("Creating test TVM module...\n");
-        size_t module_size = 0;
-        void* test_module = tvm_create_test_module(&module_size);
-
-        if (!test_module) {
-            console_printf("ERROR: Failed to create test module\n");
-            return;
-        }
-
-        console_printf("Loading TVM module (%zu bytes)...\n", module_size);
-        TVMModule* module = tvm_module_load(test_module, module_size);
-
-        if (!module) {
-            console_printf("ERROR: Failed to load TVM module\n");
-            kfree(test_module);
-            return;
-        }
-
-        console_printf("SUCCESS: TVM module loaded\n");
-        console_printf("  Name: %s\n", module->name ? module->name : "(unnamed)");
-        console_printf("  Functions: %d\n", module->num_functions);
-        console_printf("  Module size: %zu bytes\n", module_size);
-
-        /* Store in runtime (module is already stored by tvm_module_load) */
-        kfree(test_module);
-
-        console_printf("Use 'tvmrun' to execute inference\n");
-    } else if (strcmp(command, "tvmrun") == 0) {
-        /* Run inference with loaded TVM module */
-        extern TVMRuntime* tvm_get_runtime(void);
-        extern int tvm_module_run(TVMModule* module, TVMTensor* input, TVMTensor* output);
-        extern TVMTensor* tvm_tensor_create(int64_t* shape, int ndim, int dtype);
-        extern void tvm_tensor_free(TVMTensor* tensor);
-
-        TVMRuntime* runtime = tvm_get_runtime();
-        if (!runtime || !runtime->initialized) {
-            console_printf("ERROR: TVM runtime not initialized\n");
-            return;
-        }
-
-        /* Get loaded module from runtime */
-        extern TVMModule* tvm_get_loaded_module(void);
-        TVMModule* module = tvm_get_loaded_module();
-
-        if (!module) {
-            console_printf("ERROR: No TVM module loaded. Use 'tvmload' first.\n");
-            return;
-        }
-
-        console_printf("Running inference with TVM module...\n");
-
-        /* Create test input tensor (1x512) */
-        int64_t input_shape[] = {1, 512};
-        TVMTensor* input = tvm_tensor_create(input_shape, 2, TVM_DTYPE_FLOAT32);
-
-        if (!input) {
-            console_printf("ERROR: Failed to create input tensor\n");
-            return;
-        }
-
-        /* Initialize input with test data */
-        float* input_data = (float*)input->data;
-        for (int i = 0; i < 512; i++) {
-            input_data[i] = (float)i / 512.0f;
-        }
-
-        /* Create output tensor (1x512) */
-        int64_t output_shape[] = {1, 512};
-        TVMTensor* output = tvm_tensor_create(output_shape, 2, TVM_DTYPE_FLOAT32);
-
-        if (!output) {
-            console_printf("ERROR: Failed to create output tensor\n");
-            tvm_tensor_free(input);
-            return;
-        }
-
-        /* Run inference */
-        console_printf("Executing graph...\n");
-        int result = tvm_module_run(module, input, output);
-
-        if (result != 0) {
-            console_printf("ERROR: Inference failed with code %d\n", result);
-        } else {
-            console_printf("SUCCESS: Inference completed\n");
-
-            /* Print sample output values */
-            float* output_data = (float*)output->data;
-            console_printf("Output (first 10 values): ");
-            for (int i = 0; i < 10 && i < 512; i++) {
-                console_printf("%.3f ", output_data[i]);
-            }
-            console_printf("\n");
-        }
-
-        /* Clean up */
-        tvm_tensor_free(input);
-        tvm_tensor_free(output);
     } else if (strcmp(command, "dmatest") == 0) {
         dma_run_tests();
     } else if (strcmp(command, "dmastats") == 0) {
@@ -953,16 +822,6 @@ void process_command(const char *command)
             }
         } else {
             console_printf("Failed to load model (error %d)\n", ret);
-        }
-    } else if (strcmp(command, "loadtiny") == 0) {
-        /* Load TinyStories model from VirtIO disk */
-        extern int tinystories_load_from_disk(void);
-        int ret = tinystories_load_from_disk();
-        if (ret == 0) {
-            console_printf("TinyStories model ready for inference!\n");
-            console_printf("Use 'ai <prompt>' to generate text.\n");
-        } else {
-            console_printf("Failed to load TinyStories model (error %d)\n", ret);
         }
     } else if (strcmp(command, "blkstats") == 0) {
         virtio_blk_print_stats();
@@ -2106,24 +1965,38 @@ int llama_generate(const char *prompt, char *response, size_t max_response)
     return -1;
 }
 
-/* External declaration for TinyLlama inference (from tinyllama_gguf_inference.c) */
-extern int tinyllama_inference(const char *prompt, char *response, size_t max_response);
-
-/* External declaration for quantized integer-only neural network inference (fallback) */
-extern int quantized_neural_inference(const char *prompt, char *response, size_t max_response);
-
 int real_tinyllama_inference(const char *prompt, char *response, size_t max_response)
 {
-    /* Try TinyLlama GGUF inference first (uses real BPE tokenizer) */
-    int result = tinyllama_inference(prompt, response, max_response);
+    /* Canonical GGUF path: BPE encode -> streaming inference -> decode
+     * (same pipeline as the 'talk' command; the old tinyllama_gguf_inference.c
+     * and quantized_inference.c engines were archived). */
+    extern int streaming_inference_init(bool preallocate);
+    extern int streaming_inference_generate(const int *, int, int *, int);
+    extern int bpe_tokenizer_encode(const char *, int *, int, bool, bool);
+    extern int bpe_tokenizer_decode(const int *, int, char *, int);
 
-    if (result > 0) {
-        return result;
+    int input_tokens[256];
+    int input_len = bpe_tokenizer_encode(prompt, input_tokens, 256, false, false);
+    if (input_len <= 0) {
+        console_printf("[Inference] Failed to tokenize prompt\n");
+        return -1;
     }
 
-    /* Fallback to quantized inference if TinyLlama fails */
-    console_printf("[Inference] TinyLlama failed, using quantized fallback\n");
-    return quantized_neural_inference(prompt, response, max_response);
+    if (streaming_inference_init(false) != 0) {
+        console_printf("[Inference] Streaming inference unavailable\n");
+        return -1;
+    }
+
+    int output_tokens[128];
+    int generated = streaming_inference_generate(input_tokens, input_len,
+                                                 output_tokens, 128);
+    if (generated <= 0) {
+        console_printf("[Inference] Generation failed\n");
+        return -1;
+    }
+
+    int len = bpe_tokenizer_decode(output_tokens, generated, response, max_response);
+    return len > 0 ? len : -1;
 }
 
 /* Basic math function stubs for TinyStories (simplified implementations) */

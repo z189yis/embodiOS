@@ -8,7 +8,6 @@
 #include "embodios/kernel.h"
 #include "embodios/console.h"
 #include "embodios/mm.h"
-#include "embodios/tvm.h"
 #include "embodios/fixed_point.h"
 
 /* SIMD matrix multiplication from simd_ops.c */
