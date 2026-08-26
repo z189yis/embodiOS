@@ -15,7 +15,7 @@
  * Constants
  * ============================================================================ */
 
-#define MODEL_REGISTRY_MAX_MODELS   3       /* Maximum simultaneous models */
+#define MODEL_REGISTRY_MAX_MODELS   8       /* Maximum simultaneous models */
 #define MODEL_ID_INVALID            (-1)    /* Invalid model ID */
 #define MODEL_NAME_MAX_LEN          64      /* Maximum model name length */
 
@@ -44,6 +44,7 @@ typedef struct model_slot {
     uint64_t load_time;                 /* Load timestamp (cycles) */
     uint64_t last_used;                 /* Last inference timestamp */
     uint32_t inference_count;           /* Number of inferences run */
+    uint32_t capabilities;              /* Bitmask of MODEL_CAP_* (from model) */
     char source_path[128];              /* Source path/identifier */
 } model_slot_t;
 
@@ -182,6 +183,15 @@ struct embodios_model* model_registry_get(int model_id);
  * Returns: Pointer to slot, NULL if invalid ID
  */
 const model_slot_t* model_registry_get_slot(int model_id);
+
+/**
+ * model_registry_get_capabilities - Get capabilities of a loaded model
+ * @model_id: Model ID
+ *
+ * Returns the MODEL_CAP_* bitmask carried by the loaded model
+ * (see model.h). Returns 0 for invalid/unloaded slots.
+ */
+uint32_t model_registry_get_capabilities(int model_id);
 
 /**
  * model_registry_find_by_name - Find model ID by name

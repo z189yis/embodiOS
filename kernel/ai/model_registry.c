@@ -5,8 +5,9 @@
  * AI models at runtime without kernel reboot.
  *
  * Features:
- * - Up to 3 models loaded simultaneously
+ * - Up to 8 models loaded simultaneously
  * - Active model switching for inference
+ * - Model capability tracking (MODEL_CAP_*, see model.h)
  * - Memory tracking and cleanup
  * - Statistics and debugging
  */
@@ -21,6 +22,7 @@
 extern int strcmp(const char* s1, const char* s2);
 extern size_t strlen(const char* s);
 extern void* memset(void* s, int c, size_t n);
+extern char* strcpy(char* dest, const char* src);
 
 /* External model loader */
 extern struct embodios_model* load_model_from_memory(void* data, size_t size);
@@ -80,7 +82,7 @@ static void safe_strncpy(char* dest, const char* src, size_t size)
 /**
  * find_free_slot - Find first available slot
  *
- * Returns: Slot index (0-2), or -1 if none available
+ * Returns: Slot index, or -1 if none available
  */
 static int find_free_slot(void)
 {
@@ -96,7 +98,7 @@ static int find_free_slot(void)
  * is_valid_id - Check if model ID is valid
  * @model_id: Model ID to check
  *
- * Returns: true if valid (0-2), false otherwise
+ * Returns: true if valid within slot range, false otherwise
  */
 static bool is_valid_id(int model_id)
 {
@@ -133,6 +135,7 @@ int model_registry_init(void)
         g_registry.slots[i].load_time = 0;
         g_registry.slots[i].last_used = 0;
         g_registry.slots[i].inference_count = 0;
+        g_registry.slots[i].capabilities = 0;
         g_registry.slots[i].source_path[0] = '\0';
     }
 
@@ -201,7 +204,7 @@ bool model_registry_is_initialized(void)
  * Parses the model, allocates workspace, and registers it in
  * an available slot. Does not automatically activate the model.
  *
- * Returns: Model ID (0-2) on success, negative error on failure
+ * Returns: Model ID on success, negative error on failure
  */
 int model_registry_load(const void* data, size_t size, const char* name)
 {
@@ -253,6 +256,7 @@ int model_registry_load(const void* data, size_t size, const char* name)
     slot->load_time = get_cycles();
     slot->last_used = slot->load_time;
     slot->inference_count = 0;
+    slot->capabilities = model->capabilities;
 
     /* Set source name */
     if (name && name[0] != '\0') {
@@ -398,6 +402,7 @@ int model_registry_unload(int model_id)
     slot->load_time = 0;
     slot->last_used = 0;
     slot->inference_count = 0;
+    slot->capabilities = 0;
     slot->source_path[0] = '\0';
 
     /* Update statistics */
@@ -499,7 +504,7 @@ int model_registry_get_active_id(void)
 
 /**
  * model_registry_get - Get model by ID
- * @model_id: Model ID (0-2)
+ * @model_id: Model ID
  *
  * Returns: Model pointer, NULL if not loaded
  */
@@ -513,7 +518,7 @@ struct embodios_model* model_registry_get(int model_id)
 
 /**
  * model_registry_get_slot - Get slot by ID
- * @model_id: Model ID (0-2)
+ * @model_id: Model ID
  *
  * Returns: Slot pointer, NULL if invalid
  */
@@ -523,6 +528,24 @@ const model_slot_t* model_registry_get_slot(int model_id)
         return NULL;
     }
     return &g_registry.slots[model_id];
+}
+
+/**
+ * model_registry_get_capabilities - Get capabilities of a loaded model
+ * @model_id: Model ID
+ *
+ * Returns the MODEL_CAP_* bitmask carried by the loaded model.
+ * Returns 0 for invalid or unloaded slots.
+ */
+uint32_t model_registry_get_capabilities(int model_id)
+{
+    if (!g_registry.initialized || !is_valid_id(model_id)) {
+        return 0;
+    }
+    if (g_registry.slots[model_id].state == MODEL_SLOT_FREE) {
+        return 0;
+    }
+    return g_registry.slots[model_id].capabilities;
 }
 
 /**
@@ -615,8 +638,8 @@ void model_registry_print_status(void)
                    g_registry.stats.current_count, MODEL_REGISTRY_MAX_MODELS);
     console_printf("Active: %d\n\n", g_registry.active_id);
 
-    console_printf("Slot  State     Name                    Memory\n");
-    console_printf("----  --------  ----------------------  --------\n");
+    console_printf("Slot  State     Name                    Memory     Caps\n");
+    console_printf("----  --------  ----------------------  --------  -------\n");
 
     for (int i = 0; i < MODEL_REGISTRY_MAX_MODELS; i++) {
         model_slot_t* slot = &g_registry.slots[i];
@@ -633,10 +656,18 @@ void model_registry_print_status(void)
         if (slot->state == MODEL_SLOT_FREE) {
             console_printf("[%d]   %-8s  -\n", i, state_str);
         } else {
-            console_printf("[%d]   %-8s  %-22s  %zu KB\n",
+            char caps[32];
+            if (slot->capabilities & MODEL_CAP_TEXT_GEN) {
+                strcpy(caps, "text-gen");
+            } else if (slot->capabilities & MODEL_CAP_CODE_GEN) {
+                strcpy(caps, "code-gen");
+            } else {
+                strcpy(caps, "none");
+            }
+            console_printf("[%d]   %-8s  %-22s  %8zu KB  %s\n",
                            i, state_str,
                            slot->source_path[0] ? slot->source_path : "(unnamed)",
-                           slot->workspace_size / 1024);
+                           slot->workspace_size / 1024, caps);
         }
     }
 
