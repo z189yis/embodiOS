@@ -70,6 +70,9 @@ extern void arch_early_init(void);
 extern void arch_cpu_init(void);
 extern void arch_interrupt_init(void);
 
+/* Timer subsystem */
+extern void timer_init(void);
+
 /* Memory management initialization */
 extern void pmm_init(void* mem_start, size_t mem_size);
 extern void vmm_init(void);
@@ -261,6 +264,11 @@ void kernel_main(void)
      * Must run after arch_smp_init() which enables the Local APIC. */
     console_printf("Initializing interrupts...\n");
     arch_interrupt_init();
+
+    /* Initialize the timer subsystem: programs the PIT divisor (100Hz)
+     * and enables HAL tick accounting. kernel_main never called
+     * timer_init() before, so the PIT ran at its reset default. */
+    timer_init();
 
     /* VirtIO block driver for loading models from disk */
     console_printf("Initializing VirtIO block driver...\n");
