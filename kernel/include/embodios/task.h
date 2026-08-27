@@ -108,6 +108,23 @@ void task_yield(void);
  */
 void task_exit(void);
 
+/**
+ * task_block - Block the current task until woken
+ *
+ * Marks the current task TASK_BLOCKED and switches to the next ready
+ * task. The task is excluded from scheduling until another task calls
+ * task_wake() on it. Must not be called from interrupt context.
+ */
+void task_block(void);
+
+/**
+ * task_wake - Make a blocked task ready again
+ *
+ * Moves a TASK_BLOCKED task back into the ready queue. No-op for tasks
+ * in any other state. Safe to call from task context only.
+ */
+void task_wake(task_t *task);
+
 /* ============================================================================
  * CPU Affinity Management (SMP)
  * ============================================================================ */

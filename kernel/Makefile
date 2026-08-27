@@ -281,7 +281,7 @@ GGML_C_SOURCES = \
 
 # Architecture-specific sources
 ifeq ($(ARCH),x86_64)
-    ARCH_AS_SOURCES = $(ARCH_DIR)/boot.S $(ARCH_DIR)/interrupt.S
+    ARCH_AS_SOURCES = $(ARCH_DIR)/boot.S $(ARCH_DIR)/interrupt.S $(ARCH_DIR)/ctx_switch.S
     ARCH_C_SOURCES = \
         $(ARCH_DIR)/cpu.c \
         $(ARCH_DIR)/vga.c \
@@ -299,9 +299,9 @@ endif
 ifeq ($(ARCH),aarch64)
     ifeq ($(BUILD_OS),Darwin)
         # Use assembly UART for HVF compatibility (avoids post-indexed stores)
-        ARCH_AS_SOURCES = $(ARCH_DIR)/boot.S $(ARCH_DIR)/mmu.S $(ARCH_DIR)/uart_asm.S
+        ARCH_AS_SOURCES = $(ARCH_DIR)/boot.S $(ARCH_DIR)/mmu.S $(ARCH_DIR)/uart_asm.S $(ARCH_DIR)/ctx_switch.S
     else
-        ARCH_AS_SOURCES = $(ARCH_DIR)/boot_linux.S $(ARCH_DIR)/mmu.S $(ARCH_DIR)/uart_asm.S
+        ARCH_AS_SOURCES = $(ARCH_DIR)/boot_linux.S $(ARCH_DIR)/mmu.S $(ARCH_DIR)/uart_asm.S $(ARCH_DIR)/ctx_switch.S
     endif
     ARCH_C_SOURCES = \
         $(ARCH_DIR)/cpu.c \
