@@ -125,6 +125,7 @@ static struct {
     uint32_t preemption_disable_count; /* Nested preemption disable counter */
     bool preemption_pending;    /* Preemption requested while disabled */
     uint64_t priority_inversions; /* Total priority inversions detected */
+    bool switch_in_progress;    /* True between schedule() entry and resume */
 } sched_state = {
     .current_task = NULL,
     .task_list = NULL,
@@ -137,7 +138,8 @@ static struct {
     .preemptions = 0,
     .preemption_disable_count = 0,
     .preemption_pending = false,
-    .priority_inversions = 0
+    .priority_inversions = 0,
+    .switch_in_progress = false
 };
 
 /* ============================================================================
@@ -147,6 +149,19 @@ static struct {
 /* Priority queue management */
 static void ready_queue_insert(task_t *task);
 static void ready_queue_remove(task_t *task);
+
+/* Context switch assembly (arch/x86_64/ctx_switch.S, arch/aarch64/ctx_switch.S):
+ * saves callee-saved registers + flags + return address onto the current
+ * stack, records the stack pointer in *save_slot, and resumes new_sp. */
+extern void ctx_switch(unsigned long *save_slot, unsigned long new_sp);
+
+/* Defined later in this file */
+task_t* get_current_task(void);
+void task_exit(void);
+
+/* Every task's first frame "returns" here: runs the entry point, then
+ * exits the task so the slot can be reused. */
+static void task_trampoline(void);
 
 /* Deadline management */
 static void deadline_list_insert(task_t *task);
@@ -268,8 +283,24 @@ task_t* task_create(const char *name, void (*entry)(void), uint8_t priority)
         return NULL;
     }
 
-    /* Set up initial stack */
-    task->stack_pointer = (uint8_t*)task->stack_base + TASK_STACK_SIZE;
+    /* Build the initial context frame at the top of the stack.
+     * Layout must mirror ctx_switch's save order (see ctx_switch.S):
+     * ascending addresses hold r15,r14,r13,r12,rbx,rbp,rflags,retaddr
+     * plus one dead alignment slot above retaddr. On the first switch,
+     * ctx_switch "returns" into task_trampoline. */
+    {
+        unsigned long *sp = (unsigned long *)((uint8_t *)task->stack_base + TASK_STACK_SIZE);
+        *(--sp) = 0;                        /* alignment slot (dead) */
+        *(--sp) = (unsigned long)(uintptr_t)task_trampoline;  /* ret target */
+        *(--sp) = 0x202UL;                  /* RFLAGS: IF=1, reserved bit */
+        *(--sp) = 0;                        /* rbp */
+        *(--sp) = 0;                        /* rbx */
+        *(--sp) = 0;                        /* r12 */
+        *(--sp) = 0;                        /* r13 */
+        *(--sp) = 0;                        /* r14 */
+        *(--sp) = 0;                        /* r15 */
+        task->stack_pointer = sp;
+    }
 
     /* Add to task list */
     task->next = sched_state.task_list;
@@ -696,6 +727,8 @@ static void task_remove_waiter(task_t *holder, task_t *waiter)
  */
 void schedule(void)
 {
+    task_t *prev, *next;
+
     if (!sched_state.initialized) {
         return;
     }
@@ -703,36 +736,85 @@ void schedule(void)
     /* Check deadlines and boost priority for tasks approaching deadline */
     check_deadlines();
 
+    prev = sched_state.current_task;
+    sched_state.switch_in_progress = true;
+
     /* If current task is still running, make it ready and re-queue */
-    if (sched_state.current_task && sched_state.current_task->state == TASK_RUNNING) {
-        sched_state.current_task->state = TASK_READY;
-        ready_queue_insert(sched_state.current_task);
+    if (prev && prev->state == TASK_RUNNING) {
+        prev->state = TASK_READY;
+        ready_queue_insert(prev);
     }
 
     /* Get highest priority ready task (head of ready queue) */
-    task_t *next = sched_state.ready_queue;
+    next = sched_state.ready_queue;
     if (!next) {
         /* No ready tasks */
         sched_state.current_task = NULL;
+        sched_state.switch_in_progress = false;
         return;
     }
 
     /* Remove from ready queue and switch to it */
     ready_queue_remove(next);
 
-    /* Track context switch */
-    if (sched_state.current_task != next) {
+    if (prev != next) {
+        extern void ctx_switch(unsigned long *, unsigned long);
+
         sched_state.context_switches++;
+        sched_state.current_task = next;
+        next->state = TASK_RUNNING;
+
+        /* Reset time quantum for new task (10 ticks = 100ms at 100Hz) */
+        sched_state.ticks_remaining = 10;
+
+        if (prev) {
+            ctx_switch((unsigned long *)&prev->stack_pointer,
+                       (unsigned long)(uintptr_t)next->stack_pointer);
+            /* Execution resumes here when another switch comes back to us.
+             * We were dequeued when selected, so claim RUNNING again -
+             * otherwise our next yield() would skip the requeue and
+             * orphan this task outside all queues. */
+            prev->state = TASK_RUNNING;
+        } else {
+            /* Bootstrap handoff: kernel_main hands the CPU over to the
+             * first task and its boot context is abandoned. */
+            static unsigned long boot_sp_slot;
+            ctx_switch(&boot_sp_slot, (unsigned long)(uintptr_t)next->stack_pointer);
+
+            console_printf("Scheduler: bootstrap context resumed unexpectedly\n");
+            __asm__ volatile("cli");
+            for (;;) { __asm__ volatile("hlt"); }
+        }
+    } else {
+        /* Selected ourselves: we are out of the queue again */
+        prev->state = TASK_RUNNING;
+        sched_state.ticks_remaining = 10;
     }
 
-    sched_state.current_task = next;
-    next->state = TASK_RUNNING;
+    sched_state.switch_in_progress = false;
+}
 
-    /* Reset time quantum for new task (10 ticks = 100ms at 100Hz) */
-    sched_state.ticks_remaining = 10;
+/**
+ * task_trampoline - First instruction a new task executes
+ *
+ * The initial context frame built by task_create() "returns" here from
+ * ctx_switch. Runs the task's entry point, then exits so that the slot
+ * and stack are released instead of returning into nothing.
+ */
+static void task_trampoline(void)
+{
+    task_t *self = get_current_task();
 
-    /* In a real implementation, we would context switch here */
-    /* For now, we'll just run tasks cooperatively */
+    if (self && self->entry) {
+        self->entry();
+    }
+
+    task_exit();
+
+    /* task_exit switches away unless no tasks remain */
+    console_printf("Scheduler: last task exited, halting\n");
+    __asm__ volatile("cli");
+    for (;;) { __asm__ volatile("hlt"); }
 }
 
 /**
@@ -756,9 +838,10 @@ void scheduler_tick(void)
         return;
     }
 
-    /* No current task - schedule next task */
+    /* No current task: bootstrap only. kernel_main performs the handoff
+     * by calling schedule() directly; switching from inside the timer
+     * ISR would abandon the frame before the EOI reaches the PIC. */
     if (!sched_state.current_task) {
-        schedule();
         return;
     }
 
@@ -779,22 +862,23 @@ void scheduler_tick(void)
         return;
     }
 
-    /* Check if higher priority task is ready (preemption check) */
-    if (sched_state.ready_queue &&
-        sched_state.ready_queue->priority < sched_state.current_task->priority) {
-        /* Higher priority task is ready - preempt current task */
-        sched_state.preemptions++;
-        schedule();
+    /* M1.1 boundary: the timer interrupt does not switch contexts yet.
+     * A switch from inside the ISR would abandon the in-progress frame
+     * before the EOI reaches the PIC. Both preemption and round-robin
+     * quantum expiry mark the request; the next yield or shell-loop
+     * schedule() call processes it. */
+    if ((sched_state.ready_queue &&
+         sched_state.ready_queue->priority < sched_state.current_task->priority)) {
+        sched_state.preemption_pending = true;
         return;
     }
 
     /* Check if time quantum expired for equal-priority round-robin */
     if (sched_state.ticks_remaining == 0) {
-        /* Time quantum expired - check if there are other ready tasks */
+        /* Check if there are other ready tasks */
         if (sched_state.ready_queue) {
-            /* Check if there's a task with same or higher priority ready */
             if (sched_state.ready_queue->priority <= sched_state.current_task->priority) {
-                schedule();
+                sched_state.preemption_pending = true;
                 return;
             }
         }
@@ -826,6 +910,47 @@ void task_yield(void)
 }
 
 /**
+ * task_block - Block the current task until explicitly woken
+ *
+ * Marks the current task TASK_BLOCKED (excluded from all scheduling
+ * queues) and switches to the next ready task. The task stays asleep
+ * until another task calls task_wake() on it, which makes it READY
+ * again. Blocking is voluntary, so unlike preemption this is safe to
+ * use anywhere outside interrupt context.
+ */
+void task_block(void)
+{
+    task_t *self = sched_state.current_task;
+
+    if (!self) {
+        return;
+    }
+
+    self->state = TASK_BLOCKED;
+    schedule();
+
+    /* Resumed by task_wake(): schedule()'s resume path restored our
+     * RUNNING state. */
+}
+
+/**
+ * task_wake - Make a blocked task ready again
+ * @task: Task to wake
+ *
+ * Moves a TASK_BLOCKED task back into the ready queue. No-op if the
+ * task is not currently blocked.
+ */
+void task_wake(task_t *task)
+{
+    if (!task || task->state != TASK_BLOCKED) {
+        return;
+    }
+
+    task->state = TASK_READY;
+    ready_queue_insert(task);
+}
+
+/**
  * task_exit - Terminate current task
  *
  * Marks current task as TASK_DEAD and removes it from all scheduling queues
@@ -848,6 +973,12 @@ void task_exit(void)
         deadline_list_remove(task);
 
         schedule();
+
+        /* schedule() only returns here when no other task is ready.
+         * Returning would unwind into a dead trampoline frame - halt. */
+        console_printf("Scheduler: no runnable tasks after exit, halting\n");
+        __asm__ volatile("cli");
+        for (;;) { __asm__ volatile("hlt"); }
     }
 }
 

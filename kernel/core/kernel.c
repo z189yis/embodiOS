@@ -73,6 +73,10 @@ extern void arch_interrupt_init(void);
 /* Timer subsystem */
 extern void timer_init(void);
 
+/* Tasks created at boot (definitions below kernel_main) */
+static void shell_task_entry(void);
+void ctx_switch_self_test(void);
+
 /* Memory management initialization */
 extern void pmm_init(void* mem_start, size_t mem_size);
 extern void vmm_init(void);
@@ -409,8 +413,89 @@ void kernel_main(void)
     console_printf("Auto-running benchmark...\n");
     process_command("benchmark");
     #endif
-    /* Main kernel loop */
+
+    /* Hand the CPU over to the scheduler (M1.1): the interactive shell
+     * becomes a task and a monitor task runs the context-switch self-test
+     * before yielding control. kernel_main's boot context is abandoned in
+     * the bootstrap switch inside schedule(). */
+    if (!task_create("shell", shell_task_entry, 31)) {
+        console_printf("FATAL: failed to create shell task\n");
+        arch_disable_interrupts();
+        for (;;) { __asm__ volatile("hlt"); }
+    }
+    if (!task_create("ctxmonitor", ctx_switch_self_test, 5)) {
+        console_printf("CTX SWITCH TEST FAIL: cannot create monitor task\n");
+        arch_disable_interrupts();
+        for (;;) { __asm__ volatile("hlt"); }
+    }
+
+    /* Bootstrap: never returns */
+    schedule();
+
+    console_printf("Scheduler: bootstrap returned, halting\n");
+    arch_disable_interrupts();
+    for (;;) { __asm__ volatile("hlt"); }
+}
+
+/* Shell main loop, run as a task so it can be scheduled */
+static void shell_task_entry(void)
+{
     kernel_loop();
+}
+
+/* Context-switch self-test task: spawns two worker tasks that ping-pong
+ * via task_yield() while the monitor BLOCKS, then verifies their counters
+ * advanced - proof that schedule()'s switch moves execution between
+ * independent stacks. The QEMU boot smoke test in CI asserts on the
+ * CTX SWITCH TEST marker. */
+#define CTX_TEST_ROUNDS 50
+
+static volatile uint32_t ctx_worker_a_count;
+static volatile uint32_t ctx_worker_b_count;
+static volatile bool ctx_workers_done;
+static task_t *ctx_monitor_tcb;
+
+static void ctx_worker_a(void)
+{
+    for (int i = 0; i < CTX_TEST_ROUNDS; i++) {
+        ctx_worker_a_count++;
+        task_yield();
+    }
+    ctx_workers_done = true;
+    task_wake(ctx_monitor_tcb);
+}
+
+static void ctx_worker_b(void)
+{
+    while (!ctx_workers_done) {
+        ctx_worker_b_count++;
+        task_yield();
+    }
+}
+
+void ctx_switch_self_test(void)
+{
+    ctx_monitor_tcb = get_current_task();
+
+    if (!task_create("ctxA", ctx_worker_a, 8) ||
+        !task_create("ctxB", ctx_worker_b, 8)) {
+        console_printf("CTX SWITCH TEST FAIL: cannot create workers\n");
+        return;
+    }
+
+    /* Block until worker A signals completion. While blocked, the
+     * lower-priority workers own the CPU entirely. */
+    task_block();
+
+    if (ctx_worker_a_count == CTX_TEST_ROUNDS && ctx_worker_b_count > 0) {
+        console_printf("CTX SWITCH TEST OK: %u / %u switches\n",
+                       (unsigned)ctx_worker_a_count,
+                       (unsigned)ctx_worker_b_count);
+    } else {
+        console_printf("CTX SWITCH TEST FAIL: a=%u b=%u done=%d\n",
+                       (unsigned)ctx_worker_a_count,
+                       (unsigned)ctx_worker_b_count, ctx_workers_done);
+    }
 }
 
 void kernel_loop(void)

@@ -303,6 +303,20 @@ jobs:
             echo "✓ Timer interrupts working"
         fi
 
+        # Context switch self-test must pass (M1.1: tasks really switch)
+        if grep -q "CTX SWITCH TEST FAIL" boot.log; then
+            echo "✗ Context switch self-test failed"
+            tail -20 boot.log
+            exit 1
+        fi
+        if grep -q "CTX SWITCH TEST OK" boot.log; then
+            echo "✓ Task context switching working"
+        else
+            echo "✗ No context switch self-test result found"
+            tail -20 boot.log
+            exit 1
+        fi
+
         # Report additional status markers if present
         grep -E "All tests passed|Tests failed|tests passed" boot.log || true
 
