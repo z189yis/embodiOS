@@ -31,12 +31,16 @@ static struct {
 void timer_interrupt_handler(void)
 {
     timer_state.ticks++;
-    
+
     /* Update seconds counter */
     if (timer_state.ticks % timer_state.frequency == 0) {
         timer_state.seconds++;
     }
-    
+
+    /* Feed the HAL tick counter (microsecond/millisecond sources) */
+    extern void timer_tick(void);
+    timer_tick();
+
     /* Call registered tick handler if any */
     if (timer_state.tick_handler) {
         timer_state.tick_handler();
@@ -50,6 +54,10 @@ void timer_init(void)
 
     /* Initialize HAL timer */
     hal_timer_init();
+
+    /* The platform timer (PIT on x86_64, arch timer on aarch64) is
+     * programmed by HAL init; enable its tick accounting. */
+    hal_timer_enable();
 
     /* Get actual frequency from HAL */
     timer_state.frequency = (uint32_t)hal_timer_get_frequency();

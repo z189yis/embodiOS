@@ -70,6 +70,9 @@ extern void arch_early_init(void);
 extern void arch_cpu_init(void);
 extern void arch_interrupt_init(void);
 
+/* Timer subsystem */
+extern void timer_init(void);
+
 /* Memory management initialization */
 extern void pmm_init(void* mem_start, size_t mem_size);
 extern void vmm_init(void);
@@ -257,6 +260,16 @@ void kernel_main(void)
     console_printf("Initializing PCI subsystem...\n");
     pci_init();
 
+    /* Initialize interrupt system (IDT + PIC remap + LAPIC LINT0).
+     * Must run after arch_smp_init() which enables the Local APIC. */
+    console_printf("Initializing interrupts...\n");
+    arch_interrupt_init();
+
+    /* Initialize the timer subsystem: programs the PIT divisor (100Hz)
+     * and enables HAL tick accounting. kernel_main never called
+     * timer_init() before, so the PIT ran at its reset default. */
+    timer_init();
+
     /* VirtIO block driver for loading models from disk */
     console_printf("Initializing VirtIO block driver...\n");
 #ifdef __aarch64__
@@ -345,7 +358,39 @@ void kernel_main(void)
     }
     console_printf("[DEBUG] Constructors done\n");
 
-    console_printf("\nEMBODIOS Ready (polling mode - no interrupts).\n");
+    /* Enable interrupts: PIT IRQ0 now ticks at 100Hz and drives
+     * timer_interrupt_handler() -> scheduler_tick(). */
+    arch_enable_interrupts();
+
+    /* Timer self-test: with IRQs enabled, system ticks must advance.
+     * The QEMU boot smoke test in CI asserts on this marker.
+     * The wait is bounded by raw TSC so it cannot hang even if the
+     * HAL clocks are not calibrated yet (QEMU TCG). */
+    {
+        extern uint64_t timer_get_ticks(void);
+
+        uint32_t lo0, hi0, lo1, hi1;
+        __asm__ volatile("rdtsc" : "=a"(lo0), "=d"(hi0));
+        uint64_t tsc0 = ((uint64_t)hi0 << 32) | lo0;
+        for (;;) {
+            __asm__ volatile("rdtsc" : "=a"(lo1), "=d"(hi1));
+            uint64_t tsc1 = ((uint64_t)hi1 << 32) | lo1;
+            if (tsc1 - tsc0 >= 150000000ULL) {
+                break;  /* ~150ms at an emulated 1GHz TSC */
+            }
+        }
+
+        uint64_t ticks = timer_get_ticks();
+        if (ticks >= 5) {
+            console_printf("TIMER SELF-TEST OK: %llu ticks in 150ms\n",
+                           (unsigned long long)ticks);
+        } else {
+            console_printf("TIMER SELF-TEST FAIL: only %llu ticks in 150ms\n",
+                           (unsigned long long)ticks);
+        }
+    }
+
+    console_printf("\nEMBODIOS Ready (timer interrupts enabled).\n");
     console_printf("Type 'help' for available commands.\n\n");
 
     /* TEMPORARY: Manually run PMM test to verify framework works */

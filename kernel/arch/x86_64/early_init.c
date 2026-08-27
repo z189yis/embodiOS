@@ -2,6 +2,7 @@
 #include <embodios/kernel.h>
 #include <embodios/types.h>
 #include <embodios/mm.h>
+#include <embodios/console.h>
 
 /* GDT entry structure */
 struct gdt_entry {
@@ -329,9 +330,31 @@ void arch_early_init(void)
 /* Initialize interrupt system */
 void arch_interrupt_init(void)
 {
-    /* TODO: Initialize IDT (Interrupt Descriptor Table) */
-    /* TODO: Initialize PIC or APIC */
-    /* For now, just a stub */
+    /* Load IDT: exception gates (0-31) + IRQ gates (32-47) */
+    extern void idt_init(void);
+    idt_init();
+
+    /* Remap the 8259 PIC so IRQ0..15 land on vectors 32..47
+     * (vector 32 = timer, matching the interrupt.S stub table).
+     * Mask everything except IRQ0; the keyboard driver polls. */
+    __asm__ volatile("outb %0, %1" :: "a"((uint8_t)0x11), "Nd"((uint16_t)0x20)); /* ICW1 */
+    __asm__ volatile("outb %0, %1" :: "a"((uint8_t)0x11), "Nd"((uint16_t)0xA0));
+    __asm__ volatile("outb %0, %1" :: "a"((uint8_t)0x20), "Nd"((uint16_t)0x21)); /* ICW2 */
+    __asm__ volatile("outb %0, %1" :: "a"((uint8_t)0x28), "Nd"((uint16_t)0xA1));
+    __asm__ volatile("outb %0, %1" :: "a"((uint8_t)0x04), "Nd"((uint16_t)0x21)); /* ICW3 */
+    __asm__ volatile("outb %0, %1" :: "a"((uint8_t)0x02), "Nd"((uint16_t)0xA1));
+    __asm__ volatile("outb %0, %1" :: "a"((uint8_t)0x01), "Nd"((uint16_t)0x21)); /* ICW4 */
+    __asm__ volatile("outb %0, %1" :: "a"((uint8_t)0x01), "Nd"((uint16_t)0xA1));
+    __asm__ volatile("outb %0, %1" :: "a"((uint8_t)0xFE), "Nd"((uint16_t)0x21)); /* mask: IRQ0 only */
+    __asm__ volatile("outb %0, %1" :: "a"((uint8_t)0xFF), "Nd"((uint16_t)0xA1));
+
+    /* PIC routing note: on this system arch_smp_init() skips APIC
+     * initialization for single-CPU QEMU ("SMP: Single processor system"),
+     * so the 8259 delivers IRQs through the CPU's default LAPIC LINT0
+     * (ExtINT mode from hardware reset) - no LAPIC programming needed.
+     * If SMP is enabled later, the APIC gets programmed and this path
+     * must be revisited. */
+    console_printf("Interrupts: IDT loaded, PIC remapped to vectors 32-47\n");
 }
 
 /* Enable interrupts */
